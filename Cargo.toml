@@ -17,5 +17,24 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 urlencoding = "2.1"
 
+# SQLite 데이터베이스
+sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "sqlite"] }
+
+# User-Agent 로테이션 및 랜덤 데이터
+rand = "0.8"
+uuid = { version = "1.6", features = ["v4"] }
+
+# HTML 압축 (메모리 효율)
+flate2 = "1.0"
+
+# 해시 계산
+sha2 = "0.10"
+
+# 날짜/시간
+chrono = "0.4"
+
+# URL 파싱
+url = "2.5"
+
 [dev-dependencies]
 mockito = "1.2"

@@ -23,6 +23,16 @@ pub enum ProductSource {
     AliExpress,
 }
 
+impl ProductSource {
+    pub fn as_str(&self) -> &str {
+        match self {
+            ProductSource::Coupang => "coupang",
+            ProductSource::Danawa => "danawa",
+            ProductSource::AliExpress => "aliexpress",
+        }
+    }
+}
+
 impl std::fmt::Display for ProductSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
