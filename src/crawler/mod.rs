@@ -1,6 +1,7 @@
 pub mod coupang;
 pub mod danawa;
 pub mod aliexpress;
+pub mod utils;
 
 use async_trait::async_trait;
 use crate::error::Result;
@@ -25,4 +26,41 @@ pub fn create_http_client(user_agent: &str) -> Result<reqwest::Client> {
         .timeout(std::time::Duration::from_secs(30))
         .cookie_store(true)
         .build()?)
+}
+
+/// 재시도 로직을 포함한 HTTP GET 요청
+pub async fn fetch_with_retry(
+    client: &reqwest::Client,
+    url: &str,
+    max_retries: u32,
+) -> Result<String> {
+    let mut last_error = None;
+
+    for attempt in 0..max_retries {
+        if attempt > 0 {
+            // 재시도 전 대기 (exponential backoff)
+            let delay = std::time::Duration::from_millis(500 * (2_u64.pow(attempt - 1)));
+            tokio::time::sleep(delay).await;
+        }
+
+        match client.get(url).send().await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    match response.text().await {
+                        Ok(text) => return Ok(text),
+                        Err(e) => last_error = Some(e.into()),
+                    }
+                } else {
+                    last_error = Some(crate::error::CrawlerError::HttpError(
+                        reqwest::Error::from(response.error_for_status().unwrap_err()),
+                    ));
+                }
+            }
+            Err(e) => last_error = Some(e.into()),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        crate::error::CrawlerError::Unknown("Max retries exceeded".to_string())
+    }))
 }

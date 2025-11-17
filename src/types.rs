@@ -55,7 +55,7 @@ impl Default for CrawlConfig {
     fn default() -> Self {
         Self {
             search_query: String::new(),
-            max_pages: 3,
+            max_pages: 5, // 더 많은 데이터 수집을 위해 5페이지로 증가
             timeout_secs: 30,
             user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".to_string(),
         }

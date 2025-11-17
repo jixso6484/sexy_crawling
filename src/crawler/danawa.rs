@@ -1,9 +1,9 @@
 use async_trait::async_trait;
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use tracing::{debug, info, warn};
 
-use crate::crawler::{create_http_client, Crawler};
-use crate::error::{CrawlerError, Result};
+use crate::crawler::{create_http_client, fetch_with_retry, utils, Crawler};
+use crate::error::Result;
 use crate::types::{CrawlConfig, Product, ProductSource};
 
 pub struct DanawaCrawler {
@@ -18,8 +18,7 @@ impl DanawaCrawler {
     }
 
     fn build_search_url(query: &str, page: u32) -> String {
-        // 다나와 검색 URL 구조
-        let page_num = (page - 1) * 30; // 다나와는 보통 30개씩
+        let page_num = (page - 1) * 30;
         format!(
             "https://search.danawa.com/dsearch.php?query={}&page={}&limit=30",
             urlencoding::encode(query),
@@ -27,100 +26,171 @@ impl DanawaCrawler {
         )
     }
 
-    fn parse_products(&self, html: &str) -> Result<Vec<Product>> {
-        let document = Html::parse_document(html);
-        let mut products = Vec::new();
+    fn extract_product_from_element(&self, element: ElementRef) -> Option<Product> {
+        // 상품명 및 링크 추출
+        let name_link_selectors = vec![
+            ".prod_name a",
+            ".prod_info a",
+            "a.prod_name",
+            "a.product-name",
+            "[class*='prod_name'] a",
+        ];
 
-        // 다나와 상품 리스트 셀렉터 (실제 구조에 맞게 조정 필요)
-        let product_selector = Selector::parse("div.prod_item, li.prod_item")
-            .map_err(|e| CrawlerError::SelectorError(e.to_string()))?;
+        let (name, product_url) = self.try_extract_name_and_link(&element, &name_link_selectors)?;
 
-        let name_selector = Selector::parse(".prod_name a, .prod_info a")
-            .map_err(|e| CrawlerError::SelectorError(e.to_string()))?;
+        if name.is_empty() || product_url.is_empty() {
+            return None;
+        }
 
-        let price_selector = Selector::parse(".price_sect strong, .price em")
-            .map_err(|e| CrawlerError::SelectorError(e.to_string()))?;
+        // 가격 추출 - 여러 셀렉터 시도
+        let price_selectors = vec![
+            ".price_sect strong",
+            ".price em",
+            ".prod_pric",
+            "strong.price",
+            "[class*='price'] strong",
+            "[class*='price'] em",
+        ];
+        let price = self.try_extract_text(&element, &price_selectors);
 
-        let image_selector = Selector::parse(".thumb_image img, .prod_img img")
-            .map_err(|e| CrawlerError::SelectorError(e.to_string()))?;
+        // 이미지 추출
+        let image_selectors = vec![
+            ".thumb_image img",
+            ".prod_img img",
+            "img.thumb",
+            "[class*='thumb'] img",
+            "img[class*='prod']",
+        ];
+        let image_url = self.try_extract_image(&element, &image_selectors);
 
-        let seller_selector = Selector::parse(".mall_name, .seller")
-            .map_err(|e| CrawlerError::SelectorError(e.to_string()))?;
+        // 판매처 추출
+        let seller_selectors = vec![
+            ".mall_name",
+            ".seller",
+            "[class*='mall']",
+            "[class*='seller']",
+        ];
+        let seller = self.try_extract_text(&element, &seller_selectors);
 
-        for element in document.select(&product_selector) {
-            let name_elem = element.select(&name_selector).next();
+        // 배송 정보
+        let delivery_selectors = vec![
+            ".delivery",
+            ".shipping",
+            "[class*='delivery']",
+            "[class*='shipping']",
+        ];
+        let delivery_info = self.try_extract_text(&element, &delivery_selectors);
 
-            let name = name_elem
-                .map(|e| e.text().collect::<String>().trim().to_string())
-                .unwrap_or_default();
+        Some(Product {
+            name,
+            price,
+            original_price: None,
+            discount_rate: None,
+            rating: None,
+            review_count: None,
+            image_url,
+            product_url: utils::make_absolute_url("https://search.danawa.com", &product_url),
+            seller,
+            delivery_info,
+            source: ProductSource::Danawa,
+            raw_data: None,
+        })
+    }
 
-            if name.is_empty() {
-                continue;
-            }
-
-            let product_url = name_elem
-                .and_then(|e| e.value().attr("href"))
-                .map(|href| {
-                    if href.starts_with("http") {
-                        href.to_string()
-                    } else if href.starts_with("//") {
-                        format!("https:{}", href)
-                    } else {
-                        format!("https://search.danawa.com{}", href)
+    fn try_extract_name_and_link(
+        &self,
+        element: &ElementRef,
+        selectors: &[&str],
+    ) -> Option<(String, String)> {
+        for selector_str in selectors {
+            if let Ok(selector) = Selector::parse(selector_str) {
+                if let Some(elem) = element.select(&selector).next() {
+                    let name = elem.text().collect::<String>().trim().to_string();
+                    if let Some(href) = elem.value().attr("href") {
+                        if !name.is_empty() && !href.is_empty() {
+                            return Some((name, href.to_string()));
+                        }
                     }
-                })
-                .unwrap_or_default();
-
-            if product_url.is_empty() {
-                continue;
+                }
             }
+        }
+        None
+    }
 
-            let price = element
-                .select(&price_selector)
-                .next()
-                .map(|e| {
-                    e.text()
+    fn try_extract_text(&self, element: &ElementRef, selectors: &[&str]) -> Option<String> {
+        for selector_str in selectors {
+            if let Ok(selector) = Selector::parse(selector_str) {
+                if let Some(elem) = element.select(&selector).next() {
+                    let text = elem
+                        .text()
                         .collect::<String>()
                         .trim()
                         .replace(",", "")
                         .replace("원", "")
                         .trim()
-                        .to_string()
-                });
-
-            let image_url = element
-                .select(&image_selector)
-                .next()
-                .and_then(|e| e.value().attr("src").or_else(|| e.value().attr("data-original")))
-                .map(|s| {
-                    if s.starts_with("http") {
-                        s.to_string()
-                    } else if s.starts_with("//") {
-                        format!("https:{}", s)
-                    } else {
-                        format!("https://search.danawa.com{}", s)
+                        .to_string();
+                    if !text.is_empty() {
+                        return Some(text);
                     }
-                });
+                }
+            }
+        }
+        None
+    }
 
-            let seller = element
-                .select(&seller_selector)
-                .next()
-                .map(|e| e.text().collect::<String>().trim().to_string());
+    fn try_extract_image(&self, element: &ElementRef, selectors: &[&str]) -> Option<String> {
+        for selector_str in selectors {
+            if let Ok(selector) = Selector::parse(selector_str) {
+                if let Some(elem) = element.select(&selector).next() {
+                    if let Some(src) = elem
+                        .value()
+                        .attr("src")
+                        .or_else(|| elem.value().attr("data-original"))
+                        .or_else(|| elem.value().attr("data-src"))
+                    {
+                        return Some(utils::make_absolute_url("https://search.danawa.com", src));
+                    }
+                }
+            }
+        }
+        None
+    }
 
-            products.push(Product {
-                name,
-                price,
-                original_price: None,
-                discount_rate: None,
-                rating: None,
-                review_count: None,
-                image_url,
-                product_url,
-                seller,
-                delivery_info: None,
-                source: ProductSource::Danawa,
-                raw_data: None,
-            });
+    fn parse_products(&self, html: &str) -> Result<Vec<Product>> {
+        let document = Html::parse_document(html);
+        let mut products = Vec::new();
+
+        // 여러 가능한 상품 컨테이너 셀렉터 시도
+        let container_selectors = vec![
+            "div.prod_item",
+            "li.prod_item",
+            ".product_list .prod_item",
+            "[class*='prod_item']",
+            ".product-item",
+        ];
+
+        for container_selector in container_selectors {
+            if let Ok(selector) = Selector::parse(container_selector) {
+                let elements: Vec<_> = document.select(&selector).collect();
+
+                if !elements.is_empty() {
+                    debug!(
+                        "Found {} product containers with selector: {}",
+                        elements.len(),
+                        container_selector
+                    );
+
+                    for element in elements {
+                        if let Some(product) = self.extract_product_from_element(element) {
+                            products.push(product);
+                        }
+                    }
+
+                    if !products.is_empty() {
+                        break;
+                    }
+                }
+            }
         }
 
         Ok(products)
@@ -142,70 +212,56 @@ impl Crawler for DanawaCrawler {
 
             let url = Self::build_search_url(&config.search_query, page);
 
-            match self.client.get(&url).send().await {
-                Ok(response) => {
-                    if !response.status().is_success() {
-                        warn!("Failed to fetch page {}: status {}", page, response.status());
-                        continue;
-                    }
+            match fetch_with_retry(&self.client, &url, 3).await {
+                Ok(html) => match self.parse_products(&html) {
+                    Ok(mut products) => {
+                        info!("Found {} products on page {}", products.len(), page);
 
-                    match response.text().await {
-                        Ok(html) => {
-                            match self.parse_products(&html) {
-                                Ok(mut products) => {
-                                    info!("Found {} products on page {}", products.len(), page);
-                                    all_products.append(&mut products);
-                                }
-                                Err(e) => {
-                                    warn!("Failed to parse products on page {}: {}", page, e);
-                                }
-                            }
+                        if products.is_empty() && page > 1 {
+                            info!("No more products found, stopping crawl");
+                            break;
                         }
-                        Err(e) => {
-                            warn!("Failed to read response text on page {}: {}", page, e);
-                        }
+
+                        all_products.append(&mut products);
                     }
-                }
+                    Err(e) => {
+                        warn!("Failed to parse products on page {}: {}", page, e);
+                    }
+                },
                 Err(e) => {
                     warn!("Failed to fetch page {}: {}", page, e);
                 }
             }
 
-            // 요청 간 딜레이
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(700)).await;
         }
 
-        info!("Danawa crawl completed. Total products: {}", all_products.len());
+        info!(
+            "Danawa crawl completed. Total products: {}",
+            all_products.len()
+        );
         Ok(all_products)
     }
 
     async fn extract_product(&self, url: &str) -> Result<Option<Product>> {
         debug!("Extracting product from URL: {}", url);
 
-        let response = self.client.get(url).send().await?;
-        if !response.status().is_success() {
-            return Ok(None);
-        }
-
-        let html = response.text().await?;
+        let html = fetch_with_retry(&self.client, url, 3).await?;
         let document = Html::parse_document(&html);
 
-        let name_selector = Selector::parse(".prod_tit, .top_summary h3")
-            .map_err(|e| CrawlerError::SelectorError(e.to_string()))?;
+        let name_selectors = vec![".prod_tit", ".top_summary h3", "h1.prod_title", "h1"];
+        let name = utils::try_selectors_text(&document, &name_selectors);
 
-        let name = document
-            .select(&name_selector)
-            .next()
-            .map(|e| e.text().collect::<String>().trim().to_string())
-            .unwrap_or_default();
-
-        if name.is_empty() {
+        if name.is_none() || name.as_ref().unwrap().is_empty() {
             return Ok(None);
         }
 
+        let price_selectors = vec![".lowest_price", ".price_sect strong", ".sale-price"];
+        let price = utils::try_selectors_text(&document, &price_selectors);
+
         Ok(Some(Product {
-            name,
-            price: None,
+            name: name.unwrap(),
+            price,
             original_price: None,
             discount_rate: None,
             rating: None,
