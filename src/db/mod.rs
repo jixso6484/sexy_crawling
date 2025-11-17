@@ -5,9 +5,8 @@ pub mod products;
 pub mod sessions;
 
 use anyhow::Result;
-use sqlx::{sqlite::SqlitePool, SqliteConnection};
-use std::path::Path;
-use tracing::{info, debug};
+use sqlx::sqlite::SqlitePool;
+use tracing::{info, debug, warn};
 
 /// SQLite 데이터베이스 관리자
 pub struct Database {
@@ -22,8 +21,8 @@ impl Database {
     pub async fn new(db_path: &str) -> Result<Self> {
         info!("Initializing database at: {}", db_path);
 
-        // 데이터베이스 파일이 없으면 생성됨
-        let db_url = format!("sqlite:{}", db_path);
+        // 데이터베이스 파일이 없으면 생성됨 (mode=rwc: read-write-create)
+        let db_url = format!("sqlite:{}?mode=rwc", db_path);
 
         // 연결 풀 생성
         let pool = SqlitePool::connect(&db_url).await?;
@@ -45,13 +44,52 @@ impl Database {
         // schema.sql 파일의 내용을 실행
         let schema_sql = include_str!("../../schema.sql");
 
-        // SQL을 세미콜론으로 분리하여 실행
-        for statement in schema_sql.split(';') {
-            let trimmed = statement.trim();
-            if !trimmed.is_empty() && !trimmed.starts_with("--") {
-                sqlx::query(trimmed)
-                    .execute(&self.pool)
-                    .await?;
+        // SQL을 세미콜론으로 분리하여 실행 (주석과 VIEW 고려)
+        let mut current_statement = String::new();
+        let mut in_create_view = false;
+
+        for line in schema_sql.lines() {
+            let trimmed = line.trim();
+
+            // 주석 스킵
+            if trimmed.starts_with("--") || trimmed.is_empty() {
+                continue;
+            }
+
+            // CREATE VIEW 감지
+            if trimmed.to_uppercase().contains("CREATE VIEW") {
+                in_create_view = true;
+            }
+
+            current_statement.push_str(line);
+            current_statement.push('\n');
+
+            // 세미콜론으로 끝나면 실행 (VIEW 내부 제외)
+            if trimmed.ends_with(';') {
+                if in_create_view {
+                    // VIEW 정의가 끝났는지 확인 (AS ... SELECT ... ; 패턴)
+                    if current_statement.to_uppercase().contains("AS") &&
+                       current_statement.to_uppercase().contains("SELECT") {
+                        in_create_view = false;
+                    } else {
+                        continue;  // VIEW 내부 계속
+                    }
+                }
+
+                let statement = current_statement.trim();
+                if !statement.is_empty() {
+                    debug!("Executing SQL: {}", &statement[..statement.len().min(100)]);
+                    match sqlx::query(statement).execute(&self.pool).await {
+                        Ok(_) => {},
+                        Err(e) => {
+                            // 이미 존재하는 경우는 무시
+                            if !e.to_string().contains("already exists") {
+                                warn!("SQL execution warning: {}", e);
+                            }
+                        }
+                    }
+                }
+                current_statement.clear();
             }
         }
 

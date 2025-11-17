@@ -1,14 +1,13 @@
 use crate::crawler::{Crawler, aliexpress::AliExpressCrawler, google::GoogleSearchCrawler};
 use crate::db::{Database, url_queue::*, html_cache::HtmlCache, products::ProductManager, sessions::*};
-use crate::utils::{HumanBehavior, AntiBotConfig, build_headers, RateLimiter, QueryVariator, BrowsingPattern};
+use crate::utils::{HumanBehavior, AntiBotConfig, RateLimiter};
 use crate::types::{CrawlConfig, Product};
-use crate::error::Result;
+use anyhow::Result;
 use tracing::{info, warn, error, debug};
 use std::sync::Arc;
-use tokio::sync::Semaphore;
 
 /// 크롤링 엔진 설정
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CrawlerEngineConfig {
     pub max_concurrent_crawls: usize,  // 동시 크롤링 수
     pub crawl_mode: CrawlMode,         // 크롤링 모드
@@ -135,9 +134,10 @@ impl CrawlerEngine {
 
         // 크롤링 설정
         let crawl_config = CrawlConfig {
-            query: query.to_string(),
-            max_pages: max_pages as usize,
+            search_query: query.to_string(),
+            max_pages,
             timeout_secs: 30,
+            user_agent: crate::utils::get_random_user_agent().to_string(),
         };
 
         // 상품 크롤링
@@ -215,7 +215,7 @@ impl CrawlerEngine {
         // HTML 캐시 확인
         let html_cache = HtmlCache::new(self.db.pool().clone());
 
-        if let Some(cached_html) = html_cache.get_html(&url_item.url).await? {
+        if let Some(_cached_html) = html_cache.get_html(&url_item.url).await? {
             debug!("Using cached HTML for: {}", url_item.url);
             // 캐시된 HTML로 파싱
             // TODO: HTML에서 직접 파싱하는 메서드 추가

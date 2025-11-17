@@ -3,7 +3,7 @@ use std::time::Duration;
 use tracing::debug;
 
 /// 사람처럼 행동하는 크롤링 시뮬레이터
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct HumanBehavior {
     pub page_reading_time: (u64, u64),      // 페이지 읽기 시간 (초) - (최소, 최대)
     pub scroll_pause_time: (u64, u64),       // 스크롤 사이 멈춤 시간 (밀리초)

@@ -2,7 +2,7 @@ use rand::Rng;
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT, ACCEPT, ACCEPT_LANGUAGE, ACCEPT_ENCODING, REFERER};
 
 /// 봇 차단 방지 설정
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AntiBotConfig {
     pub rotate_user_agent: bool,
     pub add_referer: bool,
