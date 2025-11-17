@@ -46,18 +46,24 @@ pub struct ProcessedProduct {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrawlConfig {
     pub search_query: String,
+    pub category_url: Option<String>,  // 카테고리 URL (다나와 전용)
     pub max_pages: u32,
+    pub crawl_all_pages: bool,  // true면 모든 페이지를 크롤링 (빈 페이지까지)
     pub timeout_secs: u64,
     pub user_agent: String,
+    pub output_dir: Option<String>,  // HTML 및 중간 결과 저장 디렉토리
 }
 
 impl Default for CrawlConfig {
     fn default() -> Self {
         Self {
             search_query: String::new(),
+            category_url: None,
             max_pages: 5, // 더 많은 데이터 수집을 위해 5페이지로 증가
+            crawl_all_pages: false,  // 기본값은 max_pages만큼만 크롤링
             timeout_secs: 30,
             user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".to_string(),
+            output_dir: None,
         }
     }
 }

@@ -70,6 +70,34 @@ cargo run -- search "노트북" --site aliexpress --output aliexpress.json
 cargo run -- search "노트북" --max-pages 5
 ```
 
+### 2-1. 다나와 카테고리 전체 크롤링 + Ollama 분석 ⭐ NEW
+
+다나와의 특정 카테고리에서 모든 상품을 크롤링하고 Ollama로 자동 분석합니다.
+크롤링한 페이지의 HTML과 상품 정보를 모두 저장하여 나중에 재분석이 가능합니다.
+
+```bash
+# 다나와 카테고리 URL로 모든 페이지 크롤링 + Ollama 분석
+cargo run -- category "https://prod.danawa.com/list/?cate=112758" -o result.json
+
+# 최대 페이지 수 제한 (10페이지만 크롤링)
+cargo run -- category "https://prod.danawa.com/list/?cate=112758" -o result.json --max-pages 10
+
+# 상세 로그와 함께 실행
+cargo run -- -v category "https://prod.danawa.com/list/?cate=112758" -o result.json
+```
+
+**저장되는 파일:**
+- `result.json` - 최종 분석 결과 (원본 상품, 처리된 상품, 요약 포함)
+- `crawl_data/html/page_XXXX.html` - 각 페이지의 원본 HTML
+- `crawl_data/products/page_XXXX.json` - 각 페이지에서 추출한 상품 정보
+- `crawl_data/visited_urls.json` - 방문한 URL 목록
+
+**주요 특징:**
+- 메모리 효율적: 크롤링하면서 즉시 파일에 저장
+- 중단 시에도 데이터 보존
+- 원본 HTML 보관으로 재파싱 가능
+- 크롤링 완료 후 자동으로 Ollama 분석 수행
+
 ### 3. 크롤링 결과 분석
 
 이미 크롤링된 JSON 파일을 Ollama로 분석:
@@ -141,19 +169,30 @@ cargo run -- search "맥북" --output laptop.json
 cargo run -- analyze laptop.json --analysis-type compare
 ```
 
-### 예제 2: 특정 상품 상세 분석
+### 예제 2: 다나와 카테고리 전체 분석
+
+```bash
+# 노트북 카테고리 전체 크롤링 + 분석
+cargo run -- category "https://prod.danawa.com/list/?cate=112758" -o laptop_analysis.json
+
+# 크롤링된 원본 데이터 확인
+ls crawl_data/html/      # 페이지별 HTML
+ls crawl_data/products/  # 페이지별 상품 정보
+```
+
+### 예제 3: 특정 상품 상세 분석
 
 ```bash
 # 검색 + 분석을 한 번에
 cargo run -- auto "아이폰 15" --output iphone_analysis.json
 ```
 
-### 예제 3: 커스텀 Ollama 모델 사용
+### 예제 4: 커스텀 Ollama 모델 사용
 
 ```bash
 # 다른 모델 사용 (예: mistral)
 ollama pull mistral
-cargo run -- --ollama-model mistral auto "게이밍 키보드"
+cargo run -- --ollama-model mistral category "https://prod.danawa.com/list/?cate=112758" -o result.json
 ```
 
 ## 데이터 구조
